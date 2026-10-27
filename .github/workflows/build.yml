@@ -1,0 +1,426 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create project files
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/durationcalc/app app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "DurationCalc"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.durationcalc.app"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.durationcalc.app"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="@string/app_name"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">حاسب المدة</string>
+          </resources>
+          EOF
+          cat > app/src/main/res/values/colors.xml <<'EOF'
+          <resources>
+              <color name="ic_bg">#0F3D2E</color>
+          </resources>
+          EOF
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_bg" />
+              <foreground android:drawable="@drawable/ic_foreground" />
+          </adaptive-icon>
+          EOF
+          cat > app/src/main/res/drawable/ic_foreground.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="100" android:viewportHeight="100">
+              <group android:scaleX="0.8" android:scaleY="0.8" android:pivotX="50" android:pivotY="50">
+                  <path android:strokeColor="#D4AF37" android:strokeWidth="3.5" android:strokeLineJoin="round"
+                      android:pathData="M26 18H58L74 34V80H26Z" />
+                  <path android:strokeColor="#D4AF37" android:strokeWidth="3" android:strokeLineCap="round"
+                      android:pathData="M34 24V33M41 24V33M48 24V33M55 24V33" />
+                  <path android:fillColor="#0F3D2E" android:strokeColor="#D4AF37" android:strokeWidth="4"
+                      android:pathData="M43 50H81A7 7 0 0 1 88 57V73A7 7 0 0 1 81 80H43A7 7 0 0 1 36 73V57A7 7 0 0 1 43 50Z" />
+                  <path android:strokeColor="#D4AF37" android:strokeWidth="2.5" android:strokeLineJoin="round"
+                      android:pathData="M45.5 59H52.5V71H45.5ZM45.5 65H52.5M60.5 59H67.5V71H60.5M60.5 65H67.5M71.5 59H78.5V71H71.5Z" />
+                  <path android:strokeColor="#D4AF37" android:strokeWidth="3" android:strokeLineCap="round"
+                      android:pathData="M56.5 62V62.1M56.5 68V68.1" />
+              </group>
+          </vector>
+          EOF
+          cat > app/src/main/java/com/durationcalc/app/MainActivity.kt <<'EOF'
+          package com.durationcalc.app
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.media.MediaMetadataRetriever
+          import android.net.Uri
+          import android.os.Bundle
+          import android.provider.DocumentsContract
+          import android.view.Gravity
+          import android.view.View
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.ProgressBar
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import java.util.Locale
+          import java.util.TreeMap
+          import java.util.concurrent.Executors
+          import java.util.concurrent.TimeUnit
+          import java.util.concurrent.atomic.AtomicInteger
+
+          class MainActivity : Activity() {
+              private val bg = Color.parseColor("#0F3D2E")
+              private val card = Color.parseColor("#174C3A")
+              private val line = Color.parseColor("#2C6A54")
+              private val gold = Color.parseColor("#D4AF37")
+              private val cream = Color.parseColor("#F5F0E1")
+              private val soft = Color.parseColor("#B9CFC4")
+              private val rootLabel = "ملفات المجلد نفسه"
+              private val exts = setOf("mp3", "m4a", "wav", "ogg", "oga", "opus", "flac", "aac", "wma", "amr", "mka", "3gp")
+
+              private lateinit var pick: Button
+              private lateinit var folderName: TextView
+              private lateinit var totalView: TextView
+              private lateinit var countView: TextView
+              private lateinit var status: TextView
+              private lateinit var bar: ProgressBar
+              private lateinit var warn: TextView
+              private lateinit var toggle: TextView
+              private lateinit var scroll: ScrollView
+              private lateinit var rows: LinearLayout
+
+              private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+              private fun ar(s: String): String {
+                  val sb = StringBuilder()
+                  for (c in s) sb.append(if (c in '0'..'9') ('\u0660' + (c - '0')) else c)
+                  return sb.toString()
+              }
+
+              private fun fmt(ms: Long): String {
+                  val s = (ms + 500) / 1000
+                  return ar(String.format(Locale.US, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60))
+              }
+
+              private fun shape(color: Int, r: Int): GradientDrawable {
+                  val d = GradientDrawable()
+                  d.setColor(color)
+                  d.cornerRadius = dp(r).toFloat()
+                  return d
+              }
+
+              private fun tv(text: String, size: Float, color: Int, bold: Boolean = false): TextView {
+                  val t = TextView(this)
+                  t.text = text
+                  t.textSize = size
+                  t.setTextColor(color)
+                  if (bold) t.typeface = Typeface.DEFAULT_BOLD
+                  t.gravity = Gravity.CENTER
+                  return t
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = bg
+                  window.navigationBarColor = bg
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(bg)
+                  root.layoutDirection = View.LAYOUT_DIRECTION_RTL
+                  root.setPadding(dp(18), dp(28), dp(18), dp(18))
+
+                  root.addView(tv("حاسب المدة", 20f, cream, true), LinearLayout.LayoutParams(-1, -2))
+
+                  pick = Button(this)
+                  pick.text = "اختار مجلد"
+                  pick.textSize = 18f
+                  pick.setAllCaps(false)
+                  pick.setTextColor(Color.parseColor("#1B2A22"))
+                  pick.background = shape(gold, 14)
+                  pick.setOnClickListener { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), 1) }
+                  val pickLp = LinearLayout.LayoutParams(-1, dp(56))
+                  pickLp.topMargin = dp(16)
+                  root.addView(pick, pickLp)
+
+                  folderName = tv("", 14f, soft)
+                  val fnLp = LinearLayout.LayoutParams(-1, -2)
+                  fnLp.topMargin = dp(8)
+                  fnLp.bottomMargin = dp(12)
+                  root.addView(folderName, fnLp)
+
+                  val box = LinearLayout(this)
+                  box.orientation = LinearLayout.VERTICAL
+                  box.gravity = Gravity.CENTER_HORIZONTAL
+                  box.background = shape(card, 16)
+                  box.setPadding(dp(12), dp(18), dp(12), dp(18))
+                  box.addView(tv("إجمالي المدة", 14f, soft), LinearLayout.LayoutParams(-1, -2))
+                  totalView = tv(ar("0:00:00"), 44f, gold, true)
+                  totalView.textDirection = View.TEXT_DIRECTION_LTR
+                  box.addView(totalView, LinearLayout.LayoutParams(-1, -2))
+                  box.addView(tv("ساعة · دقيقة · ثانية", 12f, soft), LinearLayout.LayoutParams(-1, -2))
+                  countView = tv("", 14f, cream)
+                  countView.setPadding(0, dp(8), 0, 0)
+                  box.addView(countView, LinearLayout.LayoutParams(-1, -2))
+                  bar = ProgressBar(this)
+                  bar.isIndeterminate = true
+                  bar.visibility = View.GONE
+                  box.addView(bar, LinearLayout.LayoutParams(dp(32), dp(32)))
+                  status = tv("", 13f, soft)
+                  box.addView(status, LinearLayout.LayoutParams(-1, -2))
+                  root.addView(box, LinearLayout.LayoutParams(-1, -2))
+
+                  warn = tv("", 13f, Color.parseColor("#F6E3A1"))
+                  warn.background = shape(Color.parseColor("#5A4A14"), 10)
+                  warn.setPadding(dp(10), dp(8), dp(10), dp(8))
+                  warn.visibility = View.GONE
+                  val warnLp = LinearLayout.LayoutParams(-1, -2)
+                  warnLp.topMargin = dp(10)
+                  root.addView(warn, warnLp)
+
+                  toggle = tv("التفصيل ▲", 15f, cream, true)
+                  toggle.setPadding(0, dp(14), 0, dp(6))
+                  toggle.visibility = View.GONE
+                  toggle.setOnClickListener {
+                      if (scroll.visibility == View.VISIBLE) {
+                          scroll.visibility = View.GONE
+                          toggle.text = "التفصيل ▼"
+                      } else {
+                          scroll.visibility = View.VISIBLE
+                          toggle.text = "التفصيل ▲"
+                      }
+                  }
+                  root.addView(toggle, LinearLayout.LayoutParams(-1, -2))
+
+                  scroll = ScrollView(this)
+                  scroll.visibility = View.GONE
+                  rows = LinearLayout(this)
+                  rows.orientation = LinearLayout.VERTICAL
+                  scroll.addView(rows, LinearLayout.LayoutParams(-1, -2))
+                  root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+                  setContentView(root)
+              }
+
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  val uri = data?.data
+                  if (requestCode == 1 && resultCode == RESULT_OK && uri != null) calculate(uri)
+              }
+
+              private fun nameOf(tree: Uri, id: String): String {
+                  val u = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+                  contentResolver.query(u, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use {
+                      if (it.moveToFirst()) return it.getString(0) ?: ""
+                  }
+                  return ""
+              }
+
+              private fun scan(tree: Uri, parentId: String, group: String?, out: MutableList<Pair<Uri, String>>) {
+                  val kids = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
+                  val cols = arrayOf(
+                      DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                      DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                      DocumentsContract.Document.COLUMN_MIME_TYPE
+                  )
+                  val found = ArrayList<Array<String>>()
+                  contentResolver.query(kids, cols, null, null, null)?.use { c ->
+                      while (c.moveToNext()) {
+                          found.add(arrayOf(c.getString(0) ?: "", c.getString(1) ?: "", c.getString(2) ?: ""))
+                      }
+                  }
+                  for (f in found) {
+                      if (f[2] == DocumentsContract.Document.MIME_TYPE_DIR) {
+                          scan(tree, f[0], group ?: f[1], out)
+                      } else if (f[2].startsWith("audio/") || exts.contains(f[1].substringAfterLast('.', "").lowercase())) {
+                          out.add(Pair(DocumentsContract.buildDocumentUriUsingTree(tree, f[0]), group ?: rootLabel))
+                      }
+                  }
+              }
+
+              private fun durationMs(uri: Uri): Long {
+                  val r = MediaMetadataRetriever()
+                  return try {
+                      r.setDataSource(this, uri)
+                      r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: -1L
+                  } catch (e: Exception) {
+                      -1L
+                  } finally {
+                      try { r.release() } catch (e: Exception) { }
+                  }
+              }
+
+              private fun calculate(tree: Uri) {
+                  pick.isEnabled = false
+                  rows.removeAllViews()
+                  toggle.visibility = View.GONE
+                  scroll.visibility = View.GONE
+                  warn.visibility = View.GONE
+                  totalView.text = ar("0:00:00")
+                  countView.text = ""
+                  bar.visibility = View.VISIBLE
+                  status.text = "جاري قراءة الملفات..."
+                  Thread {
+                      try {
+                          val rootId = DocumentsContract.getTreeDocumentId(tree)
+                          val name = nameOf(tree, rootId)
+                          runOnUiThread { folderName.text = name }
+                          val items = ArrayList<Pair<Uri, String>>()
+                          scan(tree, rootId, null, items)
+                          val times = LongArray(items.size) { -1L }
+                          val done = AtomicInteger(0)
+                          val pool = Executors.newFixedThreadPool(4)
+                          for (i in items.indices) {
+                              pool.execute {
+                                  times[i] = durationMs(items[i].first)
+                                  val d = done.incrementAndGet()
+                                  if (d % 10 == 0 || d == items.size) {
+                                      runOnUiThread { status.text = ar(d.toString() + " / " + items.size) }
+                                  }
+                              }
+                          }
+                          pool.shutdown()
+                          pool.awaitTermination(2, TimeUnit.HOURS)
+                          val groups = TreeMap<String, LongArray>(String.CASE_INSENSITIVE_ORDER)
+                          var total = 0L
+                          var bad = 0
+                          for (i in items.indices) {
+                              val g = groups.getOrPut(items[i].second) { LongArray(2) }
+                              g[1] += 1
+                              if (times[i] >= 0) {
+                                  total += times[i]
+                                  g[0] += times[i]
+                              } else {
+                                  bad++
+                              }
+                          }
+                          runOnUiThread { show(total, items.size, bad, groups) }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              bar.visibility = View.GONE
+                              pick.isEnabled = true
+                              status.text = "حصل خطأ في قراءة المجلد. جرّب مجلد تاني."
+                          }
+                      }
+                  }.start()
+              }
+
+              private fun show(total: Long, n: Int, bad: Int, groups: Map<String, LongArray>) {
+                  bar.visibility = View.GONE
+                  pick.isEnabled = true
+                  status.text = ""
+                  if (n == 0) {
+                      countView.text = "مفيش ملفات صوتية في المجلد ده"
+                      return
+                  }
+                  totalView.text = fmt(total)
+                  countView.text = ar(n.toString()) + " ملف"
+                  if (bad > 0) {
+                      warn.text = ar(bad.toString()) + " ملفات لم تُحسب"
+                      warn.visibility = View.VISIBLE
+                  }
+                  if (groups.keys.any { it != rootLabel }) {
+                      for ((gname, v) in groups) {
+                          val row = LinearLayout(this)
+                          row.orientation = LinearLayout.HORIZONTAL
+                          row.setPadding(dp(2), dp(11), dp(2), dp(11))
+                          val nm = TextView(this)
+                          nm.text = gname + "  (" + ar(v[1].toString()) + ")"
+                          nm.textSize = 15f
+                          nm.setTextColor(cream)
+                          row.addView(nm, LinearLayout.LayoutParams(0, -2, 1f))
+                          val tm = TextView(this)
+                          tm.text = fmt(v[0])
+                          tm.textSize = 15f
+                          tm.setTextColor(gold)
+                          tm.textDirection = View.TEXT_DIRECTION_LTR
+                          row.addView(tm, LinearLayout.LayoutParams(-2, -2))
+                          rows.addView(row, LinearLayout.LayoutParams(-1, -2))
+                          val sep = View(this)
+                          sep.setBackgroundColor(line)
+                          rows.addView(sep, LinearLayout.LayoutParams(-1, 1))
+                      }
+                      toggle.text = "التفصيل ▲"
+                      toggle.visibility = View.VISIBLE
+                      scroll.visibility = View.VISIBLE
+                  }
+              }
+          }
+          EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+      - name: Publish APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: duration-v${{ github.run_number }}
+          name: Duration app ${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
