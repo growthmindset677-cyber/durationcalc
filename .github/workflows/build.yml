@@ -348,7 +348,7 @@ jobs:
                           var bad = 0
                           for (i in items.indices) {
                               val g = groups.getOrPut(items[i].second) { LongArray(2) }
-                              g[1] += 1
+                              g[1] += 1L
                               if (times[i] >= 0) {
                                   total += times[i]
                                   g[0] += times[i]
